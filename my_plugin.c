@@ -5,17 +5,21 @@
   Part of grblHAL
 
   Version .2 - July 26, 2021
+  Version .85 - October 29, 2021 - Spooky
 
-  Written by JAC for use with the Expatric grblHAL2000 PrintNC controller boards:
+  Written by JAC for use with the Expatria grblHAL2000 PrintNC controller boards:
   https://github.com/Expatria-Technologies/grblhal_2000_PrintNC
 
   PrintNC - High Performance, Open Source, Steel Frame, CNC - https://wiki.printnc.info
 
   Copyright reserved by the author.
 
+  NOTE: You must add this around line 217 in gcode.h before compiling for the first time:
+  RGB_Inspection_Light = 356,         //!< 356 - M356 // ** Collides with Plasma ** On = 1, Off = 2, RGB white LED inspection light in RGB Plugin
+
   Changelog:
 
-  Cersion .1    Imported from JAC project fro grbl-Mega and adjusted for basic STATE lights
+  Cersion .1    Imported from JAC project from grbl-Mega and adjusted for basic STATE lights
 
   Version .2    Added checks for spindle on and override with RED to indicate warning
                 Moved alarm and spindle checks from report function to realtime new loop function
@@ -80,7 +84,8 @@
                 Investigate transition from STATE_HOLD to STATE_ALARM (got green lighht unexpectedly)
                 Investigate why turning on the ILIGHT when the Spindle is already on, doesn't trigger the restart/inform sequence
                 Investigate apparent situation where completion of successful gcode & chequered flag may result in lights being off completely
-                Add option to toggle idle state light from blue to inspection light per @Drewnabobber suggestion
+                Add option to toggle idle state light from blue to inspection light per @Drewnabobber suggestion (done in code, TBD in $settings)
+                Expose options for idle light color and which pins are R/G/B via $ settings
 */
 
 #include <string.h>
@@ -96,9 +101,6 @@
 #include "alarms.h"
 #include "nuts_bolts.h"         // For delay_sec non-blocking timer function
 
-// Version
-#define RGB_VERSION 4.2
-
 // Available RGB colors possible with just relays
 #define RGB_OFF     0 // All RGB Off
 #define RGB_RED     1 // Red
@@ -108,6 +110,9 @@
 #define RGB_MAGENTA 5 // Red + Bue
 #define RGB_CYAN    6 // Green + Blue
 #define RGB_WHITE   7 // Red + Green + Blue
+
+// Set preferred STATLE_IDLE light color, to move to a $ setting
+static uint8_t RGB_IDLE = RGB_BLUE; // Some people prefer WHITE for the idle color
 
 // RGB Flash States  - RENAME RGB_FS **
 #define ST_NO_FLASH                     10
@@ -163,7 +168,6 @@ static uint8_t red_port;                    // Aux out connected to a relay cont
 static uint8_t green_port;                  // Aux out connected to a relay controlling the ground line for GREEN in an LED strip
 static uint8_t blue_port;                   // Aux out connected to a relay controlling the ground line for BLUE in an LED strip
 static uint8_t ilight_button_port;          // Aux in connected to button to turn inspection light on/off, appears to default to 0 if not set
-static uint8_t toolsetter_alarm_port;       // Aux in connected to over-travel alarm signal of toolsetter
 static uint8_t rgb_lstate = ST_NO_FLASH;    // Flag to track position in light flashing sequence
 static uint8_t inspection_light_on = 0;     // Flag used for authority over steady states, overridden by ALARM states
 static uint8_t rgb_precedence = -1;         // For tracking ILIGHT or SPINDLE assert as light override
@@ -172,7 +176,6 @@ static uint8_t cycle = 1;                   // Counter for use with ARCYCLE sett
 static uint8_t hcycle = 1;                  // Hold Cycle Counter for use with STATE_HOLD light sequences
 static sys_state_t last_state = -1;         // For tracking previous state.  Also used on first call after power-on to ensure trigger
 static sys_state_t current_state;           // For storing the current state from sys.state via state_get()
-static uint8_t rcstate = RC_NEW_COLOR;      // The RGB control function state machine state
 static bool ovrr_init = 0;                  // Flag to indicate if ST_INIT was triggered in override lights function
 unsigned long rgb_time = 0;
 unsigned long current_timestamp;
@@ -305,7 +308,6 @@ static ALARM_CFG ALARM_LIGHTS[] = {                                             
 
 // For the flashing routine
 static unsigned long state_start_timestamp = 0;     // In milliseconds
-static unsigned long rgb_start_timestamp = 0;     // In milliseconds
 
 // Pin descriptions for setup as seen in $PINS command from grblHAL console
 static const char *rgb_aux_out[] = {
@@ -316,7 +318,6 @@ static const char *rgb_aux_out[] = {
 
 static const char *rgb_aux_in[] = {
     "BUTTON: Inspection Light",
-    "SIGNAL: Tool Setter Over Travel Alarm",
 };
 
 // Decs for TEMP BUTTON testing
@@ -370,18 +371,6 @@ void setInputFlags() {
     }
 }
 
-void resolveInputFlags() {
-  for(int i = 0; i < numOfInputs; i++) {
-    if(inputFlags[i] == HIGH) {
-      // Input Toggle Logic
-      inputCounters[i]++;
-      updateLEDState(i); 
-      //printString(i);
-      inputFlags[i] = LOW;
-    }
-  }
-}
-
 void updateLEDState(int input) {
   // input 0 = State 0 and 1
   if(input == 0) {
@@ -399,6 +388,19 @@ void updateLEDState(int input) {
     }
   }
 }
+
+void resolveInputFlags() {
+  for(int i = 0; i < numOfInputs; i++) {
+    if(inputFlags[i] == HIGH) {
+      // Input Toggle Logic
+      inputCounters[i]++;
+      updateLEDState(i); 
+      //printString(i);
+      inputFlags[i] = LOW;
+    }
+  }
+}
+
 
 /*void printString(int output) {
       Serial2.print("Input ");
@@ -956,7 +958,7 @@ if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspect
  
             // Chilling when idle, cool blue
             case STATE_IDLE:
-                rgb_set_led(RGB_BLUE);
+                rgb_set_led(RGB_IDLE);
                 rgb_set_lstate(ST_NO_FLASH);
                 break; 
 
@@ -1026,7 +1028,7 @@ static void onReportOptions (bool newopt) // Stock template
     on_report_options(newopt);  // Call previous function in the chain.
 
     if(!newopt)                 // Add info about us to the $I report.
-        hal.stream.write("[PLUGIN:RGB Indicator Lights v0.4]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:RGB Indicator Lights v0.85]" ASCII_EOL);
 }
 
 static void output_warning (uint_fast16_t state) // Sent if ports available < 3, see init function
@@ -1057,12 +1059,13 @@ static void onProgramCompleted (program_flow_t program_flow, bool check_mode)
     while (cf_cycle <= 5) {
         rgb_set_led(RGB_WHITE);    
         rgb_set_lstate(RGB_CFLAG);
-        hal.delay_ms(125, NULL);  // Changed from just delay() to make code more portable pre Terje IO
+        hal.delay_ms(150, NULL);  // Changed from just delay() to make code more portable pre Terje IO
         rgb_set_led(RGB_OFF);    
         rgb_set_lstate(RGB_CFLAG);
-        hal.delay_ms(125, NULL);
+        hal.delay_ms(150, NULL);
         cf_cycle++;
     }
+    current_state = state_get(); 
 
     if(on_program_completed)
         on_program_completed(program_flow, check_mode);
