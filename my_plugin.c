@@ -54,7 +54,8 @@
                 Cleaned up many of the comments
 
 
-  To Do:        Clean up and optimize code
+  To Do:        !IMPORTANT! - Address situation where after chequred flag RED for spindle is NOT restored (or is this a Makita issue?)
+                Clean up and optimize code
                 Within ALARM function
                     -Pulse axis color (R/G/B for X/Y/Z) within limit alarm cycle (likewise A/B/C axis)
                     -Differentiate between fast homing and seek in homing sequence
@@ -78,6 +79,8 @@
                 Investigate why resetting from STATE_IDLE does not result in lights recovering
                 Investigate transition from STATE_HOLD to STATE_ALARM (got green lighht unexpectedly)
                 Investigate why turning on the ILIGHT when the Spindle is already on, doesn't trigger the restart/inform sequence
+                Investigate apparent situation where completion of successful gcode & chequered flag may result in lights being off completely
+                Add option to toggle idle state light from blue to inspection light per @Drewnabobber suggestion
 */
 
 #include <string.h>
@@ -94,7 +97,7 @@
 #include "nuts_bolts.h"         // For delay_sec non-blocking timer function
 
 // Version
-#define RGB_VERSION 4
+#define RGB_VERSION 4.2
 
 // Available RGB colors possible with just relays
 #define RGB_OFF     0 // All RGB Off
@@ -153,10 +156,14 @@
 #define LED_ON_TIMER               2
 #define LED_BLINK_COMPLETE         3
 
-static uint8_t base_port;                   // Calculated starting point for assigning Aux Outputs to our pllugin
+// Declarations
+static uint8_t base_port_out;               // Calculated starting point for assigning Aux Outputs to our plugin
+static uint8_t base_port_in;                // Calculated starting point for assigning Aux Inputs to our plugin
 static uint8_t red_port;                    // Aux out connected to a relay controlling the ground line for RED in an LED strip
 static uint8_t green_port;                  // Aux out connected to a relay controlling the ground line for GREEN in an LED strip
 static uint8_t blue_port;                   // Aux out connected to a relay controlling the ground line for BLUE in an LED strip
+static uint8_t ilight_button_port;          // Aux in connected to button to turn inspection light on/off, appears to default to 0 if not set
+static uint8_t toolsetter_alarm_port;       // Aux in connected to over-travel alarm signal of toolsetter
 static uint8_t rgb_lstate = ST_NO_FLASH;    // Flag to track position in light flashing sequence
 static uint8_t inspection_light_on = 0;     // Flag used for authority over steady states, overridden by ALARM states
 static uint8_t rgb_precedence = -1;         // For tracking ILIGHT or SPINDLE assert as light override
@@ -213,14 +220,14 @@ static COLOR_LIST RGB_MASKS[8] = {
 #define ST_SHORT_LOOP       11
 
 typedef struct { // Structure to store current and previous condition status for override lights
-    uint8_t condition;
+    uint16_t condition;
     uint8_t color;
     uint8_t curr;
     uint8_t prev;
 } STATUS_LIST;
 
 // Accessed as CONDITIONS[ST_ILIGHT].curr for the current value, .prev for the previous
-static STATUS_LIST CONDITIONS[8] = {
+static STATUS_LIST CONDITIONS[16] = {
         { ST_INIT,      RGB_OFF,        0, 0},     // ST INIT [0]
         { ST_ILIGHT,    RGB_WHITE,      0, 0},     // ST_ILGHT [1]
         { ST_SPINDLE,   RGB_RED,        0, 0},     // ST_SPINDLE [2]
@@ -229,7 +236,7 @@ static STATUS_LIST CONDITIONS[8] = {
         { ST_MCODEA,    RGB_OFF,        0, 0},     // ST_MCODEA [5] - For future use A-C
         { ST_MCODEB,    RGB_OFF,        0, 0},     // ST_MCODEB [6]
         { ST_MCODEC,    RGB_OFF,        0, 0},     // ST_MCODEC [7]
- };
+};
 
 /* RGB Color mapping for STATEs and ALARMs
 Red Solid               Caution: Spindle is on (overrides other states)
@@ -300,11 +307,32 @@ static ALARM_CFG ALARM_LIGHTS[] = {                                             
 static unsigned long state_start_timestamp = 0;     // In milliseconds
 static unsigned long rgb_start_timestamp = 0;     // In milliseconds
 
-static const char *rgb[] = {
+// Pin descriptions for setup as seen in $PINS command from grblHAL console
+static const char *rgb_aux_out[] = {
     "LED Red",
     "LED Green",
     "LED Blue",
 };
+
+static const char *rgb_aux_in[] = {
+    "BUTTON: Inspection Light",
+    "SIGNAL: Tool Setter Over Travel Alarm",
+};
+
+// Decs for TEMP BUTTON testing
+// Based on button debounce example found here: 
+#define numOfInputs 1
+//const int inputPins[numOfInputs] = {36u};
+
+int LEDState = 0;
+int inputState[numOfInputs];
+int lastInputState[numOfInputs] = {LOW};
+bool inputFlags[numOfInputs] = {LOW};
+int inputCounters[numOfInputs];
+
+long lastDebounceTime[numOfInputs] = {0};
+long debounceDelay = 30;
+
 
 // Functions
 
@@ -323,6 +351,77 @@ boolean rgb_delay_ms(unsigned long duration) {
     } 
     return false;
 }
+
+void setInputFlags() {
+    for(int i = 0; i < numOfInputs; i++) {
+//    int reading = digitalRead(inputPins[i]);
+    int reading = hal.port.wait_on_input(true, ilight_button_port, WaitMode_Immediate, 0.0f);
+    if (reading != lastInputState[i]) {        
+        if (rgb_delay_ms (debounceDelay)) {
+            if (reading != inputState[i]) {
+                inputState[i] = reading;
+                if (inputState[i] == HIGH) {
+                    inputFlags[i] = HIGH;
+                }
+            }
+        }
+        lastInputState[i] = reading;
+        }
+    }
+}
+
+void resolveInputFlags() {
+  for(int i = 0; i < numOfInputs; i++) {
+    if(inputFlags[i] == HIGH) {
+      // Input Toggle Logic
+      inputCounters[i]++;
+      updateLEDState(i); 
+      //printString(i);
+      inputFlags[i] = LOW;
+    }
+  }
+}
+
+void updateLEDState(int input) {
+  // input 0 = State 0 and 1
+  if(input == 0) {
+    if(LEDState == 0) {
+      LEDState = 1;
+    }else{
+      LEDState = 0;
+    }
+  // input 1 = State 2 to 6
+  }else if(input == 1) { // 2,3,4,5,6,2,3,4,5,6,2,
+    if(LEDState == 0 || LEDState == 1 || LEDState > 5) {
+      LEDState = 2;
+    }else{
+      LEDState++;
+    }
+  }
+}
+
+/*void printString(int output) {
+      Serial2.print("Input ");
+      Serial2.print(output);
+      Serial2.print(" was pressed ");
+      Serial2.print(inputCounters[output]);
+      Serial2.println(" times.");
+}*/
+
+void resolveOutputs() {
+  switch (LEDState) {
+    case 0:
+      inspection_light_on = 0;
+      break;
+    case 1:
+      inspection_light_on = 1;
+
+      break;
+    default: 
+        break;
+  }
+}
+
 
 // Debug function to directly set a color outside of the standard function so we can use with delay() like a printf for debug
 static void rgb_debug (uint8_t rgb_debug_color) {
@@ -530,6 +629,12 @@ static void realtimeAlarmLightStates (void) {
             
         }      
     }   
+
+static void realtimeInputs() {  // Based on example given here: https://github.com/VRomanov89/EEEnthusiast/blob/master/03.%20Arduino%20Tutorials/01.%20Advanced%20Button%20Control/ButtonSketch/ButtonSketch.ino
+    setInputFlags();
+    resolveInputFlags();
+    resolveOutputs();
+}
   
 static void realtimeConditionLights(void) {
     // Lights for conditions that are not contained within specific states e.g.
@@ -546,6 +651,13 @@ static void realtimeConditionLights(void) {
 
     current_timestamp = hal.get_elapsed_ticks(); // Get current millis ticks from from the timer
     current_state = state_get();    
+
+    //bool button_pushed = hal.port.wait_on_input(true, ilight_button_port, WaitMode_Immediate, 0.0f);
+    //if (button_pushed == 1) {
+    realtimeInputs();
+       // hal.port.register_interrupt_handler(ilight_button_port, IRQ_Mode_Change, realtimeInputs);
+        //hal.port.register_interrupt_handler(toolsetter_alarm_port, IRQ_Mode_Rising, realtimeInputs);
+    //}
 
     // Save previous status only if not in a blocking state
     for (idx = 0; idx <= 7; idx++ ) {
@@ -923,7 +1035,7 @@ static void output_warning (uint_fast16_t state) // Sent if ports available < 3,
 }
 
 // Tell the user about which ports are used for the output - not sent anywhere yet
-// Is this needed since the info is in $PINS?
+// Is this needed since the info is in $PINS?  If so, add the new aux input details for ilight button & tool setter alarm
 static void output_port (uint_fast16_t state)
 {
     char msg[30];
@@ -941,7 +1053,7 @@ static void onProgramCompleted (program_flow_t program_flow, bool check_mode)
 {
     int cf_cycle = 0;
 
-    // Job finished, wave the chequered flag.  Currently blocking, but job as job is finished, is this an issue?
+    // Job finished, wave the chequered flag.  Currently blocking, but as job is finished, is this an issue?
     while (cf_cycle <= 5) {
         rgb_set_led(RGB_WHITE);    
         rgb_set_lstate(RGB_CFLAG);
@@ -963,33 +1075,50 @@ static void driverReset (void)
 {
     driver_reset();
 
-    uint32_t idx = 2; // Ports count start at 0
+    uint32_t idx_out = 2; // Ports count start at 0
     do {
-        hal.port.digital_out(base_port + --idx, false);
-    } while(idx);
+        hal.port.digital_out(base_port_out + --idx_out, false);
+    } while(idx_out);
 
     // Be aware that changing things here can lead to debugging challenges
     (inspection_light_on = 0);
 }
 
 // INIT FUNCTION - CALLED FROM drivers_unit()
-void my_plugin_init()
-{
+void my_plugin_init() {
+
+    // CLAIM AUX OUTPUTS FOR RGB LIGHT RELAYS
     if(hal.port.num_digital_out >= 3) {
 
         hal.port.num_digital_out -= 3;  // Remove the our outputs from the list of available outputs
-        base_port = hal.port.num_digital_out;
+        base_port_out = hal.port.num_digital_out;
 
         if(hal.port.set_pin_description) {  // Viewable from $PINS command in MDI / Console
-            uint32_t idx = 0;
+            uint32_t idx_out = 0;
             do {
-                hal.port.set_pin_description(true, true, base_port + idx, rgb[idx]);
-                if      (idx == 0) { red_port = idx; }
-                else if (idx == 1) { blue_port = idx; }
-                else if (idx == 2) { green_port = idx; }
-                idx++;                
-            } while(idx <= 2);
-        }
+                hal.port.set_pin_description(true, true, base_port_out + idx_out, rgb_aux_out[idx_out]);
+                if      (idx_out == 0) { red_port = idx_out; }
+                else if (idx_out == 1) { green_port = idx_out; } // NOTE - Fixed incorrect order (Blue was incorrectly here until Oct 21, 2021)
+                else if (idx_out == 2) { blue_port = idx_out; }
+                idx_out++;                
+            } while(idx_out <= 2);
+        //}
+
+    // CLAIM AUX INPUTS FOR INSPECTION LIGHT BUTTON & TOOL SETTER OVER TRAVEL ALARM
+    /*if(hal.port.num_digital_in >= 2) {
+
+        hal.port.num_digital_in -= 2;  // Remove the our inputs from the list of available inputs
+        base_port_in = 0; //hal.port.num_digital_in; Check logic on assignment, seems wrong above too then?
+
+        if(hal.port.set_pin_description) {  // Viewable from $PINS command in MDI / Console
+            uint32_t idx_in = 0;
+            do {
+                hal.port.set_pin_description(true, false, base_port_in + idx_in, rgb_aux_in[idx_in]);
+                if      (idx_in == 0) { ilight_button_port = idx_in; }
+                else if (idx_in == 1) { toolsetter_alarm_port = idx_in; }
+                idx_in++;                
+            } while(idx_in <= 1);
+        }*/
 
         last_state == STATE_CHECK_MODE;
 
@@ -1021,8 +1150,8 @@ void my_plugin_init()
         grbl.on_execute_realtime = realtimeIndicators;      // Spindle monitoring, flashing LEDs etc live here
 
         state_start_timestamp = hal.get_elapsed_ticks();    // Initialize timer for flash loop, timestamp?
-
-    } else
+    }
+} else
         protocol_enqueue_rt_command(warning_msg);
 }
 //# endif - Uncomment when moved to formal plugin name
