@@ -7,7 +7,7 @@ This plugin displays visual status by using the 7 different colors that can easi
 careted with a strip of RGB LED lights mounted under/behind the X gantry of a CNC machine.
 
 I have mine mounted on a strip of wood that is angled at 45 degrees and shines the center
-of the light the center of the gantry. [video link forthcoming]
+of the light the center of the gantry. [Updated video is coming, but in the mean time I put a few older .mp4 videos in the repo]
 
 This plugin written for the Teensy 4.1 based open source grblHAL2000 board by Expatria,
 designed for the PrintNC DIY CNC community:
