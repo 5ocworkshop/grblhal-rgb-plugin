@@ -102,7 +102,7 @@
 #define ST_OVERRIDE_LOOP_EXIT           32
 
 // Set preferred STATLE_IDLE light color, will be moving to a $ setting in future
-static uint8_t RGB_IDLE = RGB_BLUE;         // Some people prefer RGB_WHITE for the idle color
+static uint8_t RGB_IDLE = RGB_WHITE;         // Some people prefer RGB_WHITE for the idle color
 static uint8_t inspection_light_on = 0;     // Indicates whether ILIGHT inspection light is on (1) or off (0)
 static uint8_t base_port_out;               // Calculated starting point for assigning Aux Outputs to our plugin
 static uint8_t base_port_in;                // Calculated starting point for assigning Aux Inputs to our plugin
@@ -890,8 +890,8 @@ if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspect
             }
     }
     
-    if (on_state_change)         // Call previous function in the chain.
-        on_state_change(state);
+    //if (on_state_change)         // Call previous function in the chain.
+    //    on_state_change(state);
 }
 
 static void realtimeIndicators (sys_state_t state) {
