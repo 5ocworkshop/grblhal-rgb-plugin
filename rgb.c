@@ -253,8 +253,8 @@ static const char *rgb_aux_in[] = {
 
 int ILIGHT_State = 0;
 int inputState[numOfInputs];
-int lastInputState[numOfInputs] = {LOW};
-bool inputFlags[numOfInputs] = {LOW};
+int lastInputState[numOfInputs] = {false};
+bool inputFlags[numOfInputs] = {false};
 int inputCounters[numOfInputs];
 long lastDebounceTime[numOfInputs] = {0};
 long debounceDelay = 30;
@@ -265,7 +265,7 @@ long debounceDelay = 30;
 // Non-blocking ms delay function, &start_timestamp is a pointer so multiple functions can be using this simultaneously
 // Return false if within request duration, true if duration ms has elapsed.
 // boolean rgb_delay_ms(unsigned long start_timestamp, unsigned long duration) {
-boolean rgb_delay_ms(unsigned long duration) {
+bool rgb_delay_ms(unsigned long duration) {
  
   unsigned long new_current_timestamp;
 
@@ -287,8 +287,8 @@ void setInputFlags() {
         if (rgb_delay_ms (debounceDelay)) {
             if (reading != inputState[i]) {
                 inputState[i] = reading;
-                if (inputState[i] == HIGH) {
-                    inputFlags[i] = HIGH;
+                if (inputState[i] == true) {
+                    inputFlags[i] = true;
                 }
             }
         }
@@ -318,12 +318,12 @@ void updateLEDState(int input) {
 
 void resolveInputFlags() {
   for(int i = 0; i < numOfInputs; i++) {
-    if(inputFlags[i] == HIGH) {
+    if(inputFlags[i] == true) {
       // Input Toggle Logic
       inputCounters[i]++;
       updateLEDState(i); 
       //printString(i);
-      inputFlags[i] = LOW;
+      inputFlags[i] = false;
     }
   }
 }
