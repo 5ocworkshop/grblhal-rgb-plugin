@@ -34,7 +34,7 @@
 #include <string.h>
 #include "driver.h"
 
-#if RGB_ENABLE // Declared in my_machine.h - you must add in the section with the included plugins
+#if STATUS_LIGHT_ENABLE // Declared in my_machine.h - you must add in the section with the included plugins
 
 #include "grbl/protocol.h"
 #include "grbl/hal.h"
@@ -997,7 +997,7 @@ static void driverReset (void)
 
 // INIT FUNCTION - CALLED FROM plugins_init.h()
 // void my_plugin_init() {
-void rgb_init() {
+void status_light_init() {
 
     // CLAIM AUX OUTPUTS FOR RGB LIGHT RELAYS
     if(hal.port.num_digital_out >= 3) {
