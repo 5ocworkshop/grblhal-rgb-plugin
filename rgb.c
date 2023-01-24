@@ -851,9 +851,8 @@ static void realtimeConditionLights(void) {
     } // Closes Switch Statement
 }
 
-static void onStateChanged (sys_state_t state)
-{
-    current_state = state;
+static void RGBUpdateState (sys_state_t state){
+        current_state = state;
   
     // If our state has changed, or we want to force the lights to update, and no override light conditions exist
 if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspection_light_on)) && (!(hal.spindle.get_state().on))  \
@@ -889,9 +888,14 @@ if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspect
                 break;
             }
     }
+}
+
+static void RGBonStateChanged (sys_state_t state)
+{
+    RGBUpdateState(state);
     
-    //if (on_state_change)         // Call previous function in the chain.
-    //    on_state_change(state);
+    if (on_state_change)         // Call previous function in the chain.
+        on_state_change(state);
 }
 
 static void realtimeIndicators (sys_state_t state) {
@@ -917,7 +921,8 @@ static void realtimeIndicators (sys_state_t state) {
     // If no special lights are required, trigger the onStateChanged function to fall thru to default light status
     last_state = -1;
     rgb_default_trigger = 1;
-    onStateChanged(current_state);    
+    //onStateChanged(current_state); //This seems problematic because it breaks the call chain.
+    RGBUpdateState(current_state); //replaced with this function that can be called in isolation.
  
     on_execute_realtime(state);         // Call previous function in the chain
 }
@@ -1050,7 +1055,7 @@ void status_light_init() {
         grbl.on_report_options = onReportOptions;           // Nothing here yet
 
         on_state_change = grbl.on_state_change;             // Subscribe to the state changed event by saving away the original
-        grbl.on_state_change = onStateChanged;              // function pointer and adding ours to the chain.
+        grbl.on_state_change = RGBonStateChanged;              // function pointer and adding ours to the chain.
 
         on_realtime_report = grbl.on_realtime_report;       // Subscribe to realtime report events AKA ? reports
         grbl.on_realtime_report = onRealtimeReport;         // Nothing here yet
