@@ -1,105 +1,50 @@
 /*
+  rgb.c - RGB Status Light Plugin for CNC machines
 
-  rgb.c (my_plugin.c) - plugin to enable visual indicators from RGB LED lights
+  Copyright (c) 2021 JAC
+  Version 1.0 - November 7, 2021
 
-  Part of grblHAL
-
-  Version .2 - July 26, 2021
-  Version .85 - October 29, 2021 - Spooky
+  For use with grblHAL: (Official GitHub) https://github.com/grblHAL
+  Wiki (via deprecated GitHub location): https://github.com/terjeio/grblHAL/wiki/Compiling-GrblHAL
 
   Written by JAC for use with the Expatria grblHAL2000 PrintNC controller boards:
   https://github.com/Expatria-Technologies/grblhal_2000_PrintNC
 
   PrintNC - High Performance, Open Source, Steel Frame, CNC - https://wiki.printnc.info
 
+  This program is free software: you can redistribute it and/or modify
+  it under the terms of the GNU General Public License as published by
+  the Free Software Foundation, either version 3 of the License, or
+  (at your option) any later version.
+
+  This RGB control plugin is distributed in the hope that it will be useful,
+  but WITHOUT ANY WARRANTY; without even the implied warranty of
+  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+  GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with GrblHAL.  If not, see <http://www.gnu.org/licenses/>.
+
   Copyright reserved by the author.
 
-  NOTE: You must add this around line 217 in gcode.h before compiling for the first time:
+  *NOTE*: You must add this around line 217 in gcode.h before compiling for the first time:
   RGB_Inspection_Light = 356,         //!< 356 - M356 // ** Collides with Plasma ** On = 1, Off = 2, RGB white LED inspection light in RGB Plugin
-
-  Changelog:
-
-  Cersion .1    Imported from JAC project from grbl-Mega and adjusted for basic STATE lights
-
-  Version .2    Added checks for spindle on and override with RED to indicate warning
-                Moved alarm and spindle checks from report function to realtime new loop function
-                Simplified switch statement for static state light indicators
-                Moved RGB color table to a struct/array, simplifying rgb_set_state() to 3 lines
-                First check-in to personal git repo
-                Fixed bug in handling state_get() that was causing lights to indicate idle after alarm trigger
-
-  Version .3    Add discrete light sequences for particular alarms
-                Added configuration array so lights can be easily mapped to current & new alarm codes
-                Added three different delay variables to configs to improve communication
-                Standarized on three slow red flashses to indicate ALARM
-                    Followed by (with no RGB_OFF in between these levels):
-                        ALARM INFORM                e.g. Yellow for homing event 
-                        ALARM DETAIL (If Exists)    e.g. Green for seek
-                        ALARM HINT (If Exists)      e.g. Red for X axis
-                Added STATE_HOLD flashing yellow
-                Added OnProgramCompleted (M2/M30), Chequered Flag flash sequence
-
-    Version .4  Added Inspection Light, turned on via MCode `M356 Q1` and off via `M356 Q2`
-                    This may require additional trigger option, if can't send mcode during cycle run
-                Added Flood || Mist indicator (Magenta) during spindle on condition
-                Added extensive comments throughout code
-                Corrected small bug in Alarm loop that was causing some alarms to have 2 instead of 3 RED flashes at start
- 
-  Version .5    Extended handling of Inspection Light cases
-                    -If Spindle is also on, 0.5s White (ACK), 0.5s Red (Caution) then loop 5s white light, followed by 0.5s red
-                    -If Flood or Mist are also on, they flash for .5s after Red in both situations
-
-  Version .6    Added rgb_delay_ms() non-blocking delay function for lights
-                Re-factored entire alarm module to use rgb_delay_ms, making the code easier to read and use
-
-  Version .7    August 10, 2021
-                Fixed bugs in otherlights function
-                Removed various pieces of unused code
-                Cleaned up many of the comments
-
-
-  To Do:        !IMPORTANT! - Address situation where after chequred flag RED for spindle is NOT restored (or is this a Makita issue?)
-                Clean up and optimize code
-                Within ALARM function
-                    -Pulse axis color (R/G/B for X/Y/Z) within limit alarm cycle (likewise A/B/C axis)
-                    -Differentiate between fast homing and seek in homing sequence
-                Add light sequence for tool length setting steps
-                Document and annotate code - ongoing
-                Add optional ? status report section showing which lights are triggered for troubleshooting/setup?
-                Move in to formal plug-in structure and do public commit
-                Add flash state for door open condition - Investigate why this isn't an Alarm?
-                Add appropriate comment pre-amble and disclaimer
-                Add ability to set timings from $ settings? - DEFER
-                Have version number from define update in report
-                Support a terse a verbose alarm level.  Terse being only Inform level, Verbose being Detail & Hint
-                Resolve initial delay triggering RGB_RED on STATE_ALARM
-                Determine if blocking during M30 Program Completed is an issue and if so find non-blocking method
-                Noticed Hold came up as Hold:0, investigate
-                Re-strcutre RGB state machine to consolidate functions and improve readability
-                DONE: Have inspection light cycle to red or red/magenta if cutter is on
-                Locally connect Blue button to inspecetion light toggle?  Or Aux in?
-                FIXED: Reset button in UI causes all lights to go off?  DONE - triggers OnStateChanged
-                What is the deal with logging?  Can we do rsyslog somehow?
-                Investigate why resetting from STATE_IDLE does not result in lights recovering
-                Investigate transition from STATE_HOLD to STATE_ALARM (got green lighht unexpectedly)
-                Investigate why turning on the ILIGHT when the Spindle is already on, doesn't trigger the restart/inform sequence
-                Investigate apparent situation where completion of successful gcode & chequered flag may result in lights being off completely
-                Add option to toggle idle state light from blue to inspection light per @Drewnabobber suggestion (done in code, TBD in $settings)
-                Expose options for idle light color and which pins are R/G/B via $ settings
 */
 
 #include <string.h>
 #include "driver.h"
 
-// Commented out as currently using the my_plugin.c naming convention
-//#if RGB_ENABLE // Declared in my_machine.h ...
+#if STATUS_LIGHT_ENABLE // Declared in my_machine.h - you must add in the section with the included plugins
 
-#include "protocol.h"
-#include "hal.h"
-#include "state_machine.h"
-#include "system.h"
-#include "alarms.h"
-#include "nuts_bolts.h"         // For delay_sec non-blocking timer function
+#include "grbl/protocol.h"
+#include "grbl/hal.h"
+#include "grbl/state_machine.h"
+#include "grbl/system.h"
+#include "grbl/alarms.h"
+#include "grbl/nuts_bolts.h"         // For delay_sec non-blocking timer function
+
+
+// Declarations
 
 // Available RGB colors possible with just relays
 #define RGB_OFF     0 // All RGB Off
@@ -111,65 +56,61 @@
 #define RGB_CYAN    6 // Green + Blue
 #define RGB_WHITE   7 // Red + Green + Blue
 
-// Set preferred STATLE_IDLE light color, to move to a $ setting
-static uint8_t RGB_IDLE = RGB_BLUE; // Some people prefer WHITE for the idle color
+// Blink times in ms
+#define RGB_SLOW    1000
+#define RGB_FAST    750
+#define RGB_PULSE   500
 
-// RGB Flash States  - RENAME RGB_FS **
+// Override Lights - Inspection Light, Spindle On, Flood/Mist
+// States for state machine - *DO NOT CHANGE ORDER HERE*
+#define ST_INIT             0
+#define ST_ILIGHT           1
+#define ST_SPINDLE          2
+#define ST_FLOOD            3
+#define ST_MIST             4
+#define ST_MCODEA           5
+#define ST_MCODEB           6
+#define ST_MCODEC           7
+#define ST_PRECEDENCE_CHECK 8
+#define ST_LONG_LOOP        9
+#define ST_PRECEDENCE_SOLID 10
+#define ST_SHORT_LOOP       11
+
+// RGB Flash States
 #define ST_NO_FLASH                     10
 #define ST_ALARM_RAISED                 11
 #define ST_ALARM_BLACK                  12
 #define ST_ALARM_DETAIL                 13
 #define ST_ALARM_INFORM                 14
 #define ST_ALARM_HINT                   15
-#define RGB_ILIGHT                       16
-#define RGB_ILIGHT_SPINDLE               17
-#define RGB_ILIGHT_SPINDLE_FL_MIST       18
-#define RGB_SPINDLE                      19
-#define RGB_SPINDLE_FL_MIST              20
-#define RGB_FL_MIST                      21
-#define RGB_CFLAG                        22  // Is this used?
+#define RGB_ILIGHT                      16
+#define RGB_ILIGHT_SPINDLE              17
+#define RGB_ILIGHT_SPINDLE_FL_MIST      18
+#define RGB_SPINDLE                     19
+#define RGB_SPINDLE_FL_MIST             20
+#define RGB_FL_MIST                     21
+#define RGB_CFLAG                       22
 #define RGB_CYCLE_FLASH                 23
-#define ST_ALARM_TRANSITION            24
+#define ST_ALARM_TRANSITION             24
 #define RGB_ILIGHT_FL_MIST              25
-#define ST_HOLD                        26
+#define ST_HOLD                         26
 #define RGB_PRECEDENCE                  27
 #define RGB_INIT_CONDITIONS             28
 #define ST_HOLD_WITH_OVERRIDE           29
-#define ST_HOLD_OVERRIDE_RGB_OFF               30
-#define ST_HOLD_RGB_OFF                     31
-#define ST_OVERRIDE_LOOP_EXIT              32
+#define ST_HOLD_OVERRIDE_RGB_OFF        30
+#define ST_HOLD_RGB_OFF                 31
+#define ST_OVERRIDE_LOOP_EXIT           32
 
-// Blink times in ms
-#define RGB_SLOW    1000
-#define RGB_FAST    750
-#define RGB_PULSE   500
-
-// Blink durations in ms
-#define DUR_SLOW    1000
-#define DUR_FAST    500
-#define DUR_PULSE   250
-
-// RGB Control States (rcstate)
-#define RC_NEW_COLOR    0
-#define RC_COLOR_TIMER  1
-#define RC_LEDS_OFF     2
-#define RC_OFF_TIMER    3  
-#define RC_BREAK        4
-
-// RGB Function Return Codes
-#define LED_ON_NO_TIMER            1
-#define LED_ON_TIMER               2
-#define LED_BLINK_COMPLETE         3
-
-// Declarations
+// Set preferred STATLE_IDLE light color, will be moving to a $ setting in future
+static uint8_t RGB_IDLE = RGB_WHITE;         // Some people prefer RGB_WHITE for the idle color
+static uint8_t inspection_light_on = 0;     // Indicates whether ILIGHT inspection light is on (1) or off (0)
 static uint8_t base_port_out;               // Calculated starting point for assigning Aux Outputs to our plugin
 static uint8_t base_port_in;                // Calculated starting point for assigning Aux Inputs to our plugin
 static uint8_t red_port;                    // Aux out connected to a relay controlling the ground line for RED in an LED strip
 static uint8_t green_port;                  // Aux out connected to a relay controlling the ground line for GREEN in an LED strip
 static uint8_t blue_port;                   // Aux out connected to a relay controlling the ground line for BLUE in an LED strip
-static uint8_t ilight_button_port;          // Aux in connected to button to turn inspection light on/off, appears to default to 0 if not set
+static uint8_t ilight_button_port = 0;      // Aux in connected to button to turn inspection light on/off, fix when refactoring input selection code
 static uint8_t rgb_lstate = ST_NO_FLASH;    // Flag to track position in light flashing sequence
-static uint8_t inspection_light_on = 0;     // Flag used for authority over steady states, overridden by ALARM states
 static uint8_t rgb_precedence = -1;         // For tracking ILIGHT or SPINDLE assert as light override
 static uint8_t rgb_default_trigger = 0;     // Flag used for trigger default lights via OnStateChanged without STATE changing
 static uint8_t cycle = 1;                   // Counter for use with ARCYCLE settings
@@ -207,21 +148,6 @@ static COLOR_LIST RGB_MASKS[8] = {
         { 1, 1, 1 },  // White [7]
 };
 
-// Override Lights - Inspection Light, Spindle On, Flood/Mist
-// States for state machine - *DO NOT CHANGE ORDER HERE*
-#define ST_INIT             0
-#define ST_ILIGHT           1
-#define ST_SPINDLE          2
-#define ST_FLOOD            3
-#define ST_MIST             4
-#define ST_MCODEA           5
-#define ST_MCODEB           6
-#define ST_MCODEC           7
-#define ST_PRECEDENCE_CHECK 8
-#define ST_LONG_LOOP        9
-#define ST_PRECEDENCE_SOLID 10
-#define ST_SHORT_LOOP       11
-
 typedef struct { // Structure to store current and previous condition status for override lights
     uint16_t condition;
     uint8_t color;
@@ -241,7 +167,7 @@ static STATUS_LIST CONDITIONS[16] = {
         { ST_MCODEC,    RGB_OFF,        0, 0},     // ST_MCODEC [7]
 };
 
-/* RGB Color mapping for STATEs and ALARMs
+/* RGB Color mapping for STATEs and ALARMs - Should probably move to readme?
 Red Solid               Caution: Spindle is on (overrides other states)
 Red Flashing Slow       Alarm State
 Red Flashing Fast       X axis fault hint
@@ -261,7 +187,7 @@ Yellow Flashing Fast    UNASSIGNED OR A Axis fault hint
 Magenta Solid           GCode Being Executed, Spindle Off
 Magenta Flashing Slow   Abort Cycle
 Magenta Flashing Fast   UNASSIGNED OR B Axis fault hint
-s
+
 Cyan Solid              Probing
 Cyan Flashing Slow      Homing approach event
 Cyan Flashing Fast      UNASSIGNED OR C Axis fault hint
@@ -325,12 +251,11 @@ static const char *rgb_aux_in[] = {
 #define numOfInputs 1
 //const int inputPins[numOfInputs] = {36u};
 
-int LEDState = 0;
+int ILIGHT_State = 0;
 int inputState[numOfInputs];
-int lastInputState[numOfInputs] = {LOW};
-bool inputFlags[numOfInputs] = {LOW};
+int lastInputState[numOfInputs] = {false};
+bool inputFlags[numOfInputs] = {false};
 int inputCounters[numOfInputs];
-
 long lastDebounceTime[numOfInputs] = {0};
 long debounceDelay = 30;
 
@@ -340,7 +265,7 @@ long debounceDelay = 30;
 // Non-blocking ms delay function, &start_timestamp is a pointer so multiple functions can be using this simultaneously
 // Return false if within request duration, true if duration ms has elapsed.
 // boolean rgb_delay_ms(unsigned long start_timestamp, unsigned long duration) {
-boolean rgb_delay_ms(unsigned long duration) {
+bool rgb_delay_ms(unsigned long duration) {
  
   unsigned long new_current_timestamp;
 
@@ -353,6 +278,7 @@ boolean rgb_delay_ms(unsigned long duration) {
     return false;
 }
 
+// Monitors for button press
 void setInputFlags() {
     for(int i = 0; i < numOfInputs; i++) {
 //    int reading = digitalRead(inputPins[i]);
@@ -361,8 +287,8 @@ void setInputFlags() {
         if (rgb_delay_ms (debounceDelay)) {
             if (reading != inputState[i]) {
                 inputState[i] = reading;
-                if (inputState[i] == HIGH) {
-                    inputFlags[i] = HIGH;
+                if (inputState[i] == true) {
+                    inputFlags[i] = true;
                 }
             }
         }
@@ -374,66 +300,62 @@ void setInputFlags() {
 void updateLEDState(int input) {
   // input 0 = State 0 and 1
   if(input == 0) {
-    if(LEDState == 0) {
-      LEDState = 1;
+    if(ILIGHT_State == 0) {
+      ILIGHT_State = 1;
     }else{
-      LEDState = 0;
+      ILIGHT_State = 0;
     }
   // input 1 = State 2 to 6
+  // This was from an example from the web and is to cycle through states in order rather than just on/off, not used yet
   }else if(input == 1) { // 2,3,4,5,6,2,3,4,5,6,2,
-    if(LEDState == 0 || LEDState == 1 || LEDState > 5) {
-      LEDState = 2;
+    if(ILIGHT_State == 0 || ILIGHT_State == 1 || ILIGHT_State > 5) {
+      ILIGHT_State = 2;
     }else{
-      LEDState++;
+      ILIGHT_State++;
     }
   }
 }
 
 void resolveInputFlags() {
   for(int i = 0; i < numOfInputs; i++) {
-    if(inputFlags[i] == HIGH) {
+    if(inputFlags[i] == true) {
       // Input Toggle Logic
       inputCounters[i]++;
       updateLEDState(i); 
       //printString(i);
-      inputFlags[i] = LOW;
+      inputFlags[i] = false;
     }
   }
 }
 
-
-/*void printString(int output) {
-      Serial2.print("Input ");
-      Serial2.print(output);
-      Serial2.print(" was pressed ");
-      Serial2.print(inputCounters[output]);
-      Serial2.println(" times.");
-}*/
-
 void resolveOutputs() {
-  switch (LEDState) {
+  switch (ILIGHT_State) {
     case 0:
-      inspection_light_on = 0;
+        if (inspection_light_on == 1) {
+            inspection_light_on = 0;
+        }
       break;
     case 1:
-      inspection_light_on = 1;
-
+      if (inspection_light_on == 0) {
+            inspection_light_on = 1;
+        }
       break;
     default: 
         break;
   }
 }
 
-
 // Debug function to directly set a color outside of the standard function so we can use with delay() like a printf for debug
+// Should add debug output to UART port for future debugging
 static void rgb_debug (uint8_t rgb_debug_color) {
     hal.port.digital_out(red_port, RGB_MASKS[rgb_debug_color].R);
     hal.port.digital_out(green_port, RGB_MASKS[rgb_debug_color].G);
     hal.port.digital_out(blue_port, RGB_MASKS[rgb_debug_color].B);
 }
 
-static void rgb_set_led (uint8_t reqColor) { // Always sets all three LEDs to avoid unintended light combinations
-    // Change to rgb_set_led and find/replace
+// Physically sets the requested RGB light combination.
+// Always sets all three LEDs to avoid unintended light combinations
+static void rgb_set_led (uint8_t reqColor) { 
     static uint8_t currColor = 99;
     if ( currColor != reqColor) {
         currColor = reqColor;
@@ -448,12 +370,15 @@ static void rgb_set_lstate (uint8_t newstate) {
     rgb_lstate = newstate;
     current_timestamp = hal.get_elapsed_ticks();
 }
-// check - check if M-code is handled here.
+
+// M-Code handling code from Terje
+
+// check - check if M-code is handled in this plugin.
 // parameters: mcode - M-code to check for (some are predefined in user_mcode_t in grbl/gcode.h), use a cast if not.
 // returns:    mcode if handled, UserMCode_Ignore otherwise (UserMCode_Ignore is defined in grbl/gcode.h).
 static user_mcode_t check (user_mcode_t mcode)
 {
-    return mcode == RGB_Inspection_Light 
+    return mcode == RGB_Inspection_Light  // Must be added to gcode.h 
                      ? mcode                                                            // Handled by us.
                      : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore); // If another handler present then call it or return ignore.
 }
@@ -509,17 +434,17 @@ static void execute (sys_state_t state, parser_block_t *gc_block) {
 
     switch(gc_block->user_mcode) {
 
-        case RGB_Inspection_Light: // To use, call mcode with M356 Q1 where 355 is your user MCode defined in gcode.h & Q is your variable (1-5)
+        case RGB_Inspection_Light: // To use, call mcode with M356 Q1 where 356 is your user MCode defined in gcode.h & Q is your variable (1-5)
             // do something: Q parameter value can be found in gc_block->values.q.
             //               P parameter has its value in gc_block->values.p set to 1 if present, NAN if not.
             if (gc_block->values.q == 1) {      
                 //rgb_set_led(RGB_WHITE);           // M356 Q1 - Inspection light on
-                inspection_light_on = 1;              // Set flag so IDLE, JOG, HOMING etc don't over ride light, ALARM does
+                ILIGHT_State = 1;                   // Set flag so IDLE, JOG, HOMING etc don't over ride light, ALARM does
             }
             else {
                 if (gc_block->values.q == 2)        
-                   // rgb_set_led(RGB_OFF);          // M356 Q2 - Inspection light off
-                   inspection_light_on = 0;            // Remove flag
+                   // rgb_set_led(RGB_OFF);         // M356 Q2 - Inspection light off
+                   ILIGHT_State = 0;                // Remove flag
             }
             break;
 
@@ -534,11 +459,12 @@ static void execute (sys_state_t state, parser_block_t *gc_block) {
 }
 
 
+// END M-Code code from Terje
+
 static void warning_msg (uint_fast16_t state)
 {
     report_message("RGB plugin failed to initialize!", Message_Warning);
 }
-
 
 static void realtimeAlarmLightStates (void) {
 
@@ -548,7 +474,7 @@ static void realtimeAlarmLightStates (void) {
     //
     // This section handles providing light sequences for various STATE_ALARM and STATE_ESTOP conditions
     // These alarms have the highest precedence
-    // Configuration is handled in ALARM_CONFIG ALARM_LIGHTS structs at the top of the file
+    // Configuration is handled in ALARM_CONFIG & ALARM_LIGHTS structs at the top of the file
     //
     // Note: rgb_set_delay() is non-blocking
 
@@ -632,7 +558,7 @@ static void realtimeAlarmLightStates (void) {
         }      
     }   
 
-static void realtimeInputs() {  // Based on example given here: https://github.com/VRomanov89/EEEnthusiast/blob/master/03.%20Arduino%20Tutorials/01.%20Advanced%20Button%20Control/ButtonSketch/ButtonSketch.ino
+static void realtimeInputs() {  // Based on button input example given here: https://github.com/VRomanov89/EEEnthusiast/blob/master/03.%20Arduino%20Tutorials/01.%20Advanced%20Button%20Control/ButtonSketch/ButtonSketch.ino
     setInputFlags();
     resolveInputFlags();
     resolveOutputs();
@@ -645,7 +571,7 @@ static void realtimeConditionLights(void) {
     // Coolant & Mist (MAGENTA Solid)
     // Also warnings for these items within STATE_HOLD
 
-     // If only used inside this function then do not use 'static', static reserves across entire lifetime
+    // If only used inside this function then do not use 'static', static reserves across entire lifetime
     uint8_t idx = 0;
     bool rgb_cond_changed = 0;       // Tracks if conditions changed since previous loop
     bool rgb_cond_asserted = 0;      // Tracks if any conditions are asserted this loop
@@ -654,12 +580,7 @@ static void realtimeConditionLights(void) {
     current_timestamp = hal.get_elapsed_ticks(); // Get current millis ticks from from the timer
     current_state = state_get();    
 
-    //bool button_pushed = hal.port.wait_on_input(true, ilight_button_port, WaitMode_Immediate, 0.0f);
-    //if (button_pushed == 1) {
     realtimeInputs();
-       // hal.port.register_interrupt_handler(ilight_button_port, IRQ_Mode_Change, realtimeInputs);
-        //hal.port.register_interrupt_handler(toolsetter_alarm_port, IRQ_Mode_Rising, realtimeInputs);
-    //}
 
     // Save previous status only if not in a blocking state
     for (idx = 0; idx <= 7; idx++ ) {
@@ -911,9 +832,6 @@ static void realtimeConditionLights(void) {
                         rgb_set_lstate(ST_HOLD_RGB_OFF);  // Loop to flash off
                     }
             }
-            //else {
-            //    rgb_set_lstate(ST_INIT); // In the event we're here and the situation changes, re-init
-            //}
             break; 
 
         case ST_HOLD_RGB_OFF:
@@ -923,9 +841,6 @@ static void realtimeConditionLights(void) {
                         rgb_set_lstate(ST_HOLD); // Loop back to ST_HOLD               
                     }
             }                                             
-            //else {
-            //    rgb_set_lstate(ST_INIT); // In the event we're here and the situation changes, re-init
-            //}
             break;
         // End special cases
 
@@ -936,9 +851,8 @@ static void realtimeConditionLights(void) {
     } // Closes Switch Statement
 }
 
-static void onStateChanged (sys_state_t state)
-{
-    current_state = state;
+static void RGBUpdateState (sys_state_t state){
+        current_state = state;
   
     // If our state has changed, or we want to force the lights to update, and no override light conditions exist
 if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspection_light_on)) && (!(hal.spindle.get_state().on))  \
@@ -948,13 +862,6 @@ if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspect
     
         // No Over-rides or flash conditions
         switch (state) { // States with solid lights  *** These should use lookups
-
-            //case STATE_HOLD:
-                // This is handled in the realtime routine, just exit so we don't override
-                //rgb_control(RGB_YELLOW, DUR_SLOW, On, DUR_SLOW);
-              //  rgb_blink(RGB_YELLOW,3);
-               // break;
-
  
             // Chilling when idle, cool blue
             case STATE_IDLE:
@@ -981,6 +888,11 @@ if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspect
                 break;
             }
     }
+}
+
+static void RGBonStateChanged (sys_state_t state)
+{
+    RGBUpdateState(state);
     
     if (on_state_change)         // Call previous function in the chain.
         on_state_change(state);
@@ -1009,7 +921,8 @@ static void realtimeIndicators (sys_state_t state) {
     // If no special lights are required, trigger the onStateChanged function to fall thru to default light status
     last_state = -1;
     rgb_default_trigger = 1;
-    onStateChanged(current_state);    
+    //onStateChanged(current_state); //This seems problematic because it breaks the call chain.
+    RGBUpdateState(current_state); //replaced with this function that can be called in isolation.
  
     on_execute_realtime(state);         // Call previous function in the chain
 }
@@ -1028,7 +941,7 @@ static void onReportOptions (bool newopt) // Stock template
     on_report_options(newopt);  // Call previous function in the chain.
 
     if(!newopt)                 // Add info about us to the $I report.
-        hal.stream.write("[PLUGIN:RGB Indicator Lights v0.85]" ASCII_EOL);
+        hal.stream.write("[PLUGIN:RGB Indicator Lights v1.0]" ASCII_EOL);
 }
 
 static void output_warning (uint_fast16_t state) // Sent if ports available < 3, see init function
@@ -1065,7 +978,7 @@ static void onProgramCompleted (program_flow_t program_flow, bool check_mode)
         hal.delay_ms(150, NULL);
         cf_cycle++;
     }
-    current_state = state_get(); 
+    current_state = state_get();   
 
     if(on_program_completed)
         on_program_completed(program_flow, check_mode);
@@ -1087,8 +1000,9 @@ static void driverReset (void)
     (inspection_light_on = 0);
 }
 
-// INIT FUNCTION - CALLED FROM drivers_unit()
-void my_plugin_init() {
+// INIT FUNCTION - CALLED FROM plugins_init.h()
+// void my_plugin_init() {
+void status_light_init() {
 
     // CLAIM AUX OUTPUTS FOR RGB LIGHT RELAYS
     if(hal.port.num_digital_out >= 3) {
@@ -1107,7 +1021,7 @@ void my_plugin_init() {
             } while(idx_out <= 2);
         //}
 
-    // CLAIM AUX INPUTS FOR INSPECTION LIGHT BUTTON & TOOL SETTER OVER TRAVEL ALARM
+    // CLAIM AUX INPUT FOR INSPECTION LIGHT BUTTON
     /*if(hal.port.num_digital_in >= 2) {
 
         hal.port.num_digital_in -= 2;  // Remove the our inputs from the list of available inputs
@@ -1138,16 +1052,16 @@ void my_plugin_init() {
         hal.driver_reset = driverReset;
 
         on_report_options = grbl.on_report_options;         // Subscribe to report options event
-        grbl.on_report_options = onReportOptions;
+        grbl.on_report_options = onReportOptions;           // Nothing here yet
 
         on_state_change = grbl.on_state_change;             // Subscribe to the state changed event by saving away the original
-        grbl.on_state_change = onStateChanged;              // function pointer and adding ours to the chain.
+        grbl.on_state_change = RGBonStateChanged;              // function pointer and adding ours to the chain.
 
         on_realtime_report = grbl.on_realtime_report;       // Subscribe to realtime report events AKA ? reports
-        grbl.on_realtime_report = onRealtimeReport;     
+        grbl.on_realtime_report = onRealtimeReport;         // Nothing here yet
 
         on_program_completed = grbl.on_program_completed;   // Subscribe to on program completed events (lightshow on complete?)
-        grbl.on_program_completed = onProgramCompleted;     // Not using this yet, will add back if needed
+        grbl.on_program_completed = onProgramCompleted;     // Checkered Flag for successful end of program lives here
 
         on_execute_realtime = grbl.on_execute_realtime;     // Subscribe to the realtime execution event
         grbl.on_execute_realtime = realtimeIndicators;      // Spindle monitoring, flashing LEDs etc live here
@@ -1157,4 +1071,4 @@ void my_plugin_init() {
 } else
         protocol_enqueue_rt_command(warning_msg);
 }
-//# endif - Uncomment when moved to formal plugin name
+# endif
