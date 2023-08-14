@@ -27,11 +27,11 @@
 
   Copyright reserved by the author.
 
-  *NOTE*: You must add this around line 217 in gcode.h before compiling for the first time:
-  RGB_Inspection_Light = 356,         //!< 356 - M356 // ** Collides with Plasma ** On = 1, Off = 2, RGB white LED inspection light in RGB Plugin
+  M356 -  On = 1, Off = 2, RGB white LED inspection light in RGB Plugin
 */
 
 #include <string.h>
+#include <math.h>
 #include "driver.h"
 
 #if STATUS_LIGHT_ENABLE // Declared in my_machine.h - you must add in the section with the included plugins
@@ -166,6 +166,10 @@ static STATUS_LIST CONDITIONS[16] = {
         { ST_MCODEB,    RGB_OFF,        0, 0},     // ST_MCODEB [6]
         { ST_MCODEC,    RGB_OFF,        0, 0},     // ST_MCODEC [7]
 };
+
+#if GRBL_BUILD <= 20230714
+#define RGB_Inspection_Light (user_mcode_t)356
+#endif
 
 /* RGB Color mapping for STATEs and ALARMs - Should probably move to readme?
 Red Solid               Caution: Spindle is on (overrides other states)
@@ -378,7 +382,7 @@ static void rgb_set_lstate (uint8_t newstate) {
 // returns:    mcode if handled, UserMCode_Ignore otherwise (UserMCode_Ignore is defined in grbl/gcode.h).
 static user_mcode_t check (user_mcode_t mcode)
 {
-    return mcode == RGB_Inspection_Light  // Must be added to gcode.h 
+    return mcode == RGB_Inspection_Light
                      ? mcode                                                            // Handled by us.
                      : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore); // If another handler present then call it or return ignore.
 }
@@ -589,7 +593,11 @@ static void realtimeConditionLights(void) {
 
     // Update current status
     CONDITIONS[ST_ILIGHT].curr = inspection_light_on;
+#if GRBL_BUILD >= 20230213
+    CONDITIONS[ST_SPINDLE].curr = spindle_get(0)->get_state().on;
+#else
     CONDITIONS[ST_SPINDLE].curr = hal.spindle.get_state().on;
+#endif
     CONDITIONS[ST_FLOOD].curr = hal.coolant.get_state().flood;
     CONDITIONS[ST_MIST].curr = hal.coolant.get_state().mist;
     // Conditions for new MCodes, when added, go here
@@ -855,8 +863,13 @@ static void RGBUpdateState (sys_state_t state){
         current_state = state;
   
     // If our state has changed, or we want to force the lights to update, and no override light conditions exist
+#if GRBL_BUILD > 20230213
+if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspection_light_on)) && (!(spindle_get(0)->get_state().on))  \
+        && (!(hal.coolant.get_state().flood)) && (!hal.coolant.get_state().mist)  ) {
+#else
 if ( ((current_state != last_state) || (rgb_default_trigger == 1)) && (!(inspection_light_on)) && (!(hal.spindle.get_state().on))  \
-        && (!(hal.coolant.get_state().flood)) && (!hal.coolant.get_state().mist)  ) { 
+        && (!(hal.coolant.get_state().flood)) && (!hal.coolant.get_state().mist)  ) {
+#endif
 
         last_state = current_state;
     
@@ -1037,7 +1050,7 @@ void status_light_init() {
             } while(idx_in <= 1);
         }*/
 
-        last_state == STATE_CHECK_MODE;
+        last_state = STATE_CHECK_MODE;
 
         // Save away current HAL pointers so that we can use them to keep
         // any chain of M-code handlers intact.
