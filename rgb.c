@@ -1050,7 +1050,7 @@ void status_light_init() {
             } while(idx_in <= 1);
         }*/
 
-        last_state == STATE_CHECK_MODE;
+        last_state = STATE_CHECK_MODE;
 
         // Save away current HAL pointers so that we can use them to keep
         // any chain of M-code handlers intact.
