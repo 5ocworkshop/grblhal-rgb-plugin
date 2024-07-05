@@ -230,14 +230,14 @@ static void rgb_set_led (uint8_t device, rgb_color_t color)
 {
     static rgb_color_t currColor = RGB_OFF;
 
-    device = hal.rgb.num_devices;
+    device = hal.rgb0.num_devices;
 
     if (currColor.value != color.value) {
         do {
             rgb_out(--device, (currColor = color));
         } while(device);
-        if(rgb_out != rgb_set_leds && hal.rgb.write)
-            hal.rgb.write();
+        if(rgb_out != rgb_set_leds && hal.rgb0.write)
+            hal.rgb0.write();
     }
 }
 
@@ -636,9 +636,9 @@ void status_light_init (void)
 {
     bool ok;
 
-    if((ok = hal.rgb.out != NULL && hal.rgb.cap.R > 0 && hal.rgb.cap.G > 0 && hal.rgb.cap.B > 0)) {
-        rgb_out = hal.rgb.out;
-        hal.rgb.cap.value = 0; // Claim RGB output...
+    if((ok = hal.rgb0.out != NULL && hal.rgb0.cap.R > 0 && hal.rgb0.cap.G > 0 && hal.rgb0.cap.B > 0)) {
+        rgb_out = hal.rgb0.out;
+        hal.rgb0.cap.value = 0; // Claim RGB output...
     } else if((ok = hal.port.num_digital_out >= 3)) {
 
         // CLAIM AUX OUTPUTS FOR RGB LIGHT RELAYS
@@ -653,7 +653,7 @@ void status_light_init (void)
         ioport_claim(Port_Digital, Port_Output, &blue_port, "LED Blue");
 
         rgb_out = rgb_set_leds;
-        hal.rgb.num_devices = 1;
+        hal.rgb0.num_devices = 1;
     }
 
     if(ok) {
@@ -695,8 +695,8 @@ void status_light_init (void)
         on_execute_realtime = grbl.on_execute_realtime;     // Subscribe to the realtime execution event
         grbl.on_execute_realtime = onExecuteRealtime;       // Flashing LEDs live here
 
-        if(hal.rgb.set_intensity)
-            hal.rgb.set_intensity(63);
+        if(hal.rgb0.set_intensity)
+            hal.rgb0.set_intensity(63);
     } else
         protocol_enqueue_foreground_task(report_warning, "RGB plugin failed to initialize!");
 }
