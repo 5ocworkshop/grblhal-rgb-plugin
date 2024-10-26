@@ -568,14 +568,14 @@ static void driverReset (void)
 
 // M356 - inspection light: Q1 on, Q2 off
 
-static user_mcode_t check (user_mcode_t mcode)
+static user_mcode_type_t check (user_mcode_t mcode)
 {
     return mcode == RGB_Inspection_Light
-                     ? mcode                                                            // Handled by us.
-                     : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Ignore); // If another handler present then call it or return ignore.
+                     ? UserMCode_Normal                                                            // Handled by us.
+                     : (user_mcode.check ? user_mcode.check(mcode) : UserMCode_Unsupported); // If another handler present then call it or return ignore.
 }
 
-static status_code_t validate (parser_block_t *gc_block, parameter_words_t *deprecated)
+static status_code_t validate (parser_block_t *gc_block)
 {
     status_code_t state = Status_GcodeValueWordMissing;
 
@@ -601,7 +601,7 @@ static status_code_t validate (parser_block_t *gc_block, parameter_words_t *depr
             break;
     }
 
-    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block, deprecated) : state;
+    return state == Status_Unhandled && user_mcode.validate ? user_mcode.validate(gc_block) : state;
 }
 
 static void execute (sys_state_t state, parser_block_t *gc_block)
@@ -629,7 +629,7 @@ static void onReportOptions (bool newopt)
     on_report_options(newopt);  // Call previous function in the chain.
 
     if(!newopt)                 // Add info about us to the $I report.
-        hal.stream.write("[PLUGIN:RGB Indicator Lights v2.0]" ASCII_EOL);
+        report_plugin("Indicator Lights", "2.1");
 }
 
 void status_light_init (void)
@@ -667,12 +667,12 @@ void status_light_init (void)
 
         // Save away current HAL pointers so that we can use them to keep
         // any chain of M-code handlers intact.
-        memcpy(&user_mcode, &hal.user_mcode, sizeof(user_mcode_ptrs_t));
+        memcpy(&user_mcode, &grbl.user_mcode, sizeof(user_mcode_ptrs_t));
 
         // Redirect HAL pointers to our code.
-        hal.user_mcode.check = check;
-        hal.user_mcode.validate = validate;
-        hal.user_mcode.execute = execute;
+        grbl.user_mcode.check = check;
+        grbl.user_mcode.validate = validate;
+        grbl.user_mcode.execute = execute;
 
         driver_reset = hal.driver_reset;                    // Subscribe to driver reset event
         hal.driver_reset = driverReset;
