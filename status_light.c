@@ -1,5 +1,5 @@
 /*
-  rgb.c - RGB Status Light Plugin for CNC machines
+  status_light.c - RGB Status Light Plugin for CNC machines
 
   Copyright (c) 2021 JAC
   Copyright (c) 2024 Terje Io - refactored to use the new RGB API when available, reduced MCU load significantly with new state handler for blinking etc...
